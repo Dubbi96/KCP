@@ -103,7 +103,7 @@ export class LeaseService {
     if (lease.resourceType === 'slot') {
       await this.slotService.markSlotAvailable(lease.resourceId);
     } else if (lease.resourceType === 'device') {
-      await this.deviceService.setStatus(lease.resourceId, 'available', null);
+      await this.deviceService.setStatus(lease.resourceId, 'available', undefined);
     }
 
     return lease;
@@ -144,7 +144,7 @@ export class LeaseService {
       if (lease.resourceType === 'slot') {
         await this.slotService.markSlotAvailable(lease.resourceId);
       } else if (lease.resourceType === 'device') {
-        await this.deviceService.setStatus(lease.resourceId, 'available', null);
+        await this.deviceService.setStatus(lease.resourceId, 'available', undefined);
       }
     }
   }

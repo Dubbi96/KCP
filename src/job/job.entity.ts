@@ -21,13 +21,13 @@ export class JobEntity {
   tenantId: string;
 
   @Column({ type: 'uuid', nullable: true })
-  runId: string;
+  runId?: string;
 
   @Column({ type: 'uuid', nullable: true })
-  scenarioRunId: string;
+  scenarioRunId?: string;
 
   @Column({ type: 'uuid', nullable: true })
-  scenarioId: string;
+  scenarioId?: string;
 
   @Column({ type: 'varchar' })
   platform: string;
@@ -36,16 +36,16 @@ export class JobEntity {
   requiredLabels: string[];
 
   @Column({ type: 'uuid', nullable: true })
-  requiredDeviceId: string;
+  requiredDeviceId?: string;
 
   @Column({ type: 'uuid', nullable: true })
-  assignedNodeId: string;
+  assignedNodeId?: string;
 
   @Column({ type: 'uuid', nullable: true })
-  assignedSlotId: string;
+  assignedSlotId?: string;
 
   @Column({ type: 'uuid', nullable: true })
-  assignedDeviceId: string;
+  assignedDeviceId?: string;
 
   @Column({ type: 'varchar', default: 'pending' })
   status: JobStatus;
@@ -57,7 +57,7 @@ export class JobEntity {
   payload: Record<string, any>;
 
   @Column({ type: 'jsonb', nullable: true })
-  result: Record<string, any>;
+  result?: Record<string, any>;
 
   @Column({ type: 'int', default: 0 })
   attempt: number;
@@ -66,10 +66,10 @@ export class JobEntity {
   maxAttempts: number;
 
   @Column({ type: 'timestamp', nullable: true })
-  startedAt: Date;
+  startedAt?: Date;
 
   @Column({ type: 'timestamp', nullable: true })
-  completedAt: Date;
+  completedAt?: Date;
 
   @CreateDateColumn()
   createdAt: Date;

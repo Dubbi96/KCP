@@ -16,6 +16,9 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Build cache
+*.tsbuildinfo
+
 # Logs
 *.log
 logs/

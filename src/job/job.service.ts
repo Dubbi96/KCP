@@ -127,27 +127,31 @@ export class JobService {
     }
     // Release device
     if (job.assignedDeviceId) {
-      await this.deviceService.setStatus(job.assignedDeviceId, 'available', null);
+      await this.deviceService.setStatus(job.assignedDeviceId, 'available', undefined);
     }
 
     // If failed and retryable, re-queue
     if (!result.passed && result.infraFailure && job.attempt < job.maxAttempts) {
       job.status = 'retry_pending';
-      job.assignedNodeId = null;
-      job.assignedSlotId = null;
-      job.assignedDeviceId = null;
+      job.assignedNodeId = undefined;
+      job.assignedSlotId = undefined;
+      job.assignedDeviceId = undefined;
       await this.repo.save(job);
 
       // Create retry as new pending
       const retry = this.repo.create({
-        ...job,
-        id: undefined,
+        tenantId: job.tenantId,
+        runId: job.runId,
+        scenarioRunId: job.scenarioRunId,
+        scenarioId: job.scenarioId,
+        platform: job.platform,
+        requiredLabels: job.requiredLabels,
+        requiredDeviceId: job.requiredDeviceId,
+        payload: job.payload,
+        priority: job.priority,
+        attempt: job.attempt,
+        maxAttempts: job.maxAttempts,
         status: 'pending' as JobStatus,
-        result: null,
-        startedAt: null,
-        completedAt: null,
-        createdAt: undefined,
-        updatedAt: undefined,
       });
       await this.repo.save(retry);
     }
@@ -166,7 +170,7 @@ export class JobService {
     await this.repo.save(job);
 
     if (job.assignedSlotId) await this.slotService.markSlotAvailable(job.assignedSlotId);
-    if (job.assignedDeviceId) await this.deviceService.setStatus(job.assignedDeviceId, 'available', null);
+    if (job.assignedDeviceId) await this.deviceService.setStatus(job.assignedDeviceId, 'available', undefined);
 
     return job;
   }

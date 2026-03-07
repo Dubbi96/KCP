@@ -14,7 +14,9 @@ async function bootstrap() {
     new ValidationPipe({ whitelist: true, transform: true }),
   );
 
-  app.setGlobalPrefix('api');
+  app.setGlobalPrefix('api', {
+    exclude: ['dashboard'],
+  });
 
   const port = process.env.PORT || 4100;
   await app.listen(port);

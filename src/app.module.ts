@@ -1,6 +1,7 @@
-import { Module } from '@nestjs/common';
+import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
+import { HeartbeatLoggerMiddleware } from './common/heartbeat-logger';
 import { DatabaseModule } from './database/database.module';
 import { NodeModule } from './node/node.module';
 import { DeviceModule } from './device/device.module';
@@ -14,6 +15,7 @@ import { ScheduleModule as KatabScheduleModule } from './schedule/schedule.modul
 import { WebhookModule } from './webhook/webhook.module';
 import { SignalModule } from './signal/signal.module';
 import { PauseModule } from './pause/pause.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -32,6 +34,11 @@ import { PauseModule } from './pause/pause.module';
     WebhookModule,
     SignalModule,
     PauseModule,
+    DashboardModule,
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(HeartbeatLoggerMiddleware).forRoutes('nodes/heartbeat');
+  }
+}

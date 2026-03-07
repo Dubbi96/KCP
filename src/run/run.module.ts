@@ -5,6 +5,7 @@ import { ScenarioRunEntity } from './scenario-run.entity';
 import { RunService } from './run.service';
 import { RunController } from './run.controller';
 import { JobModule } from '../job/job.module';
+import { NodeModule } from '../node/node.module';
 import { WebhookModule } from '../webhook/webhook.module';
 import { PauseModule } from '../pause/pause.module';
 import { SignalModule } from '../signal/signal.module';
@@ -13,6 +14,7 @@ import { SignalModule } from '../signal/signal.module';
   imports: [
     TypeOrmModule.forFeature([RunEntity, ScenarioRunEntity]),
     JobModule,
+    NodeModule,
     forwardRef(() => WebhookModule),
     forwardRef(() => PauseModule),
     SignalModule,

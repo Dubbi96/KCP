@@ -15,6 +15,13 @@ export class NodeTokenGuard implements CanActivate {
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const req = ctx.switchToHttp().getRequest();
+
+    // mTLS: if client certificate is present, log the CN for auditing
+    const peerCert = (req.socket as any)?.getPeerCertificate?.();
+    if (peerCert?.subject?.CN) {
+      req.clientCertCN = peerCert.subject.CN;
+    }
+
     const token = req.headers['x-node-token'] as string;
     if (!token) throw new UnauthorizedException('Missing X-Node-Token');
 

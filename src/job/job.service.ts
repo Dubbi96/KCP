@@ -46,8 +46,9 @@ export class JobService {
 
   async claim(nodeId: string, platforms: string[]) {
     const node = await this.nodeService.findOne(nodeId);
+    // Draining or offline nodes cannot claim new jobs
     if (node.status !== 'online')
-      throw new BadRequestException('Node is not online');
+      throw new BadRequestException(`Node is ${node.status} — cannot claim jobs`);
 
     const job = await this.repo
       .createQueryBuilder('j')
@@ -115,6 +116,11 @@ export class JobService {
   async reportCompleted(jobId: string, result: Record<string, any>) {
     const job = await this.repo.findOne({ where: { id: jobId } });
     if (!job) throw new NotFoundException('Job not found');
+
+    // Idempotent: ignore duplicate completion callbacks
+    if (['completed', 'failed', 'cancelled', 'retry_pending'].includes(job.status)) {
+      return job;
+    }
 
     job.status = result.passed ? 'completed' : 'failed';
     job.result = result;

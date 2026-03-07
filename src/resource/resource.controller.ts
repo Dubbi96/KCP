@@ -1,4 +1,4 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ResourceService } from './resource.service';
 
 @Controller('resources')
@@ -10,6 +10,11 @@ export class ResourceController {
     return this.service.getPoolOverview();
   }
 
+  @Get('capacity')
+  async getCapacity(@Query('tenantId') tenantId?: string) {
+    return this.service.getCapacitySummary(tenantId);
+  }
+
   @Get('nodes/:id')
   async getNodeDetail(@Param('id') id: string) {
     return this.service.getNodeDetail(id);
@@ -17,9 +22,12 @@ export class ResourceController {
 
   @Get('best-node')
   async selectBestNode(
-    @Param('platform') platform: string,
+    @Query('platform') platform: string,
+    @Query('labels') labels?: string,
+    @Query('deviceId') deviceId?: string,
   ) {
-    const nodeId = await this.service.selectBestNode(platform);
+    const labelArr = labels ? labels.split(',').filter(Boolean) : undefined;
+    const nodeId = await this.service.selectBestNode(platform, labelArr, deviceId);
     return { nodeId };
   }
 }

@@ -1,6 +1,6 @@
-import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { v4 as uuid } from 'uuid';
 import { NodeEntity, NodeStatus } from './node.entity';
 import { RegisterNodeDto, HeartbeatDto } from './dto/register-node.dto';
@@ -9,6 +9,8 @@ import { SlotService } from '../slot/slot.service';
 
 @Injectable()
 export class NodeService {
+  private readonly logger = new Logger('NodeService');
+
   constructor(
     @InjectRepository(NodeEntity)
     private readonly repo: Repository<NodeEntity>,
@@ -46,11 +48,15 @@ export class NodeService {
     const node = await this.repo.findOne({ where: { id: nodeId } });
     if (!node) throw new NotFoundException('Node not found');
 
-    node.status = dto.status as NodeStatus;
+    // Draining nodes keep their status — don't let heartbeat override it
+    if (node.status !== 'draining' && node.status !== 'maintenance') {
+      node.status = dto.status as NodeStatus;
+    }
     node.lastHeartbeatAt = new Date();
     if (dto.cpuCores !== undefined) node.cpuCores = dto.cpuCores;
     if (dto.memoryMb !== undefined) node.memoryMb = dto.memoryMb;
     if (dto.diskGb !== undefined) node.diskGb = dto.diskGb;
+    if (dto.diskUsagePercent !== undefined) node.metadata = { ...node.metadata, diskUsagePercent: dto.diskUsagePercent };
     if (dto.cpuUsagePercent !== undefined) node.cpuUsagePercent = dto.cpuUsagePercent;
     if (dto.memoryUsagePercent !== undefined) node.memoryUsagePercent = dto.memoryUsagePercent;
     node.metadata = {
@@ -59,6 +65,7 @@ export class NodeService {
       activeSessions: dto.activeSessions,
       appiumHealth: dto.appiumHealth,
       playwrightHealth: dto.playwrightHealth,
+      agentVersion: dto.agentVersion,
     };
 
     await this.repo.save(node);
@@ -71,7 +78,13 @@ export class NodeService {
       await this.slotService.updateSlotStatus(nodeId, dto.slots);
     }
 
-    return { ok: true };
+    // Return directives to the node (e.g., drain command)
+    const directives: Record<string, any> = {};
+    if (node.status === 'draining') {
+      directives.drain = true;
+    }
+
+    return { ok: true, directives };
   }
 
   async findAll(): Promise<NodeEntity[]> {
@@ -88,12 +101,36 @@ export class NodeService {
     return this.repo.findOne({ where: { apiToken: token } });
   }
 
+  /**
+   * Set node status with side-effect handling.
+   * 'draining' = stop assigning new jobs, wait for in-flight to finish.
+   * 'maintenance' / 'offline' = immediately release resources.
+   */
   async setStatus(id: string, status: NodeStatus) {
-    await this.repo.update(id, { status });
+    const node = await this.repo.findOne({ where: { id } });
+    if (!node) return;
+
+    const prevStatus = node.status;
+    node.status = status;
+    await this.repo.save(node);
+
     if (status === 'offline' || status === 'maintenance') {
       await this.slotService.markNodeSlotsOffline(id);
       await this.deviceService.markNodeDevicesOffline(id);
     }
+
+    this.logger.log(`Node ${node.name} status: ${prevStatus} → ${status}`);
+  }
+
+  /**
+   * Initiate graceful drain: no new jobs assigned, wait for in-flight to complete.
+   */
+  async drain(id: string) {
+    const node = await this.findOne(id);
+    if (node.status === 'draining') return { nodeId: id, status: 'already_draining' };
+
+    await this.setStatus(id, 'draining');
+    return { nodeId: id, status: 'draining', message: 'Node will transition to offline when all active jobs complete.' };
   }
 
   async unregister(id: string) {
@@ -108,18 +145,24 @@ export class NodeService {
     return this.repo.find({ where: { status: 'online' as NodeStatus } });
   }
 
+  async findDrainingNodes(): Promise<NodeEntity[]> {
+    return this.repo.find({ where: { status: 'draining' as NodeStatus } });
+  }
+
   async markStaleNodesOffline(timeoutSec: number) {
     const cutoff = new Date(Date.now() - timeoutSec * 1000);
     const stale = await this.repo
       .createQueryBuilder('n')
-      .where('n.status = :status', { status: 'online' })
+      .where('n.status IN (:...statuses)', { statuses: ['online', 'draining'] })
       .andWhere('n.lastHeartbeatAt < :cutoff', { cutoff })
       .getMany();
 
+    const ids: string[] = [];
     for (const node of stale) {
-      console.log(`[KCP] Node ${node.name} (${node.id}) went offline — no heartbeat since ${node.lastHeartbeatAt}`);
+      this.logger.warn(`Node ${node.name} (${node.id}) went offline — no heartbeat since ${node.lastHeartbeatAt}`);
       await this.setStatus(node.id, 'offline');
+      ids.push(node.id);
     }
-    return stale.length;
+    return ids;
   }
 }

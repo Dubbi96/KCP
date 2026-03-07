@@ -37,6 +37,12 @@ export class NodeController {
     return this.service.setStatus(id, status as any);
   }
 
+  @Post(':id/drain')
+  @HttpCode(200)
+  async drain(@Param('id') id: string) {
+    return this.service.drain(id);
+  }
+
   @Delete(':id')
   async unregister(@Param('id') id: string) {
     return this.service.unregister(id);

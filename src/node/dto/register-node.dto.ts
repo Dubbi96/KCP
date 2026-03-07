@@ -65,4 +65,18 @@ export class HeartbeatDto {
 
   @IsOptional()
   playwrightHealth?: boolean;
+
+  @IsOptional()
+  diskUsagePercent?: number;
+
+  @IsString()
+  @IsOptional()
+  agentVersion?: string;
+
+  @IsOptional()
+  localApiPort?: number;
+
+  @IsString()
+  @IsOptional()
+  localApiHost?: string;
 }

@@ -9,6 +9,11 @@ import { LeaseModule } from './lease/lease.module';
 import { JobModule } from './job/job.module';
 import { ResourceModule } from './resource/resource.module';
 import { HealthModule } from './health/health.module';
+import { RunModule } from './run/run.module';
+import { ScheduleModule as KatabScheduleModule } from './schedule/schedule.module';
+import { WebhookModule } from './webhook/webhook.module';
+import { SignalModule } from './signal/signal.module';
+import { PauseModule } from './pause/pause.module';
 
 @Module({
   imports: [
@@ -22,6 +27,11 @@ import { HealthModule } from './health/health.module';
     JobModule,
     ResourceModule,
     HealthModule,
+    RunModule,
+    KatabScheduleModule,
+    WebhookModule,
+    SignalModule,
+    PauseModule,
   ],
 })
 export class AppModule {}

@@ -1,0 +1,43 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: katab
+      POSTGRES_PASSWORD: katab_secret
+      POSTGRES_DB: katab_control_plane
+    ports:
+      - "5433:5432"
+    volumes:
+      - kcp_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U katab"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  control-plane:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "4100:4100"
+    environment:
+      NODE_ENV: development
+      PORT: 4100
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USERNAME: katab
+      DB_PASSWORD: katab_secret
+      DB_DATABASE: katab_control_plane
+      JWT_SECRET: local-dev-jwt-secret
+      CORS_ORIGIN: http://localhost:5173,http://localhost:4000
+      NODE_HEARTBEAT_TIMEOUT_SEC: 90
+      LEASE_DEFAULT_TTL_SEC: 3600
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  kcp_postgres_data:

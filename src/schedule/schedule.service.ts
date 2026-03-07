@@ -1,10 +1,12 @@
 import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, LessThanOrEqual } from 'typeorm';
+import { Repository, LessThanOrEqual, DataSource } from 'typeorm';
 import { Interval } from '@nestjs/schedule';
 import { ScheduleEntity } from './schedule.entity';
 import { PlannedRunEntity, PlannedRunStatus } from './planned-run.entity';
 import { RunService } from '../run/run.service';
+
+const LOCK_SCHEDULE_DAEMON = 100_005;
 
 @Injectable()
 export class ScheduleService {
@@ -16,6 +18,7 @@ export class ScheduleService {
     @InjectRepository(PlannedRunEntity)
     private readonly plannedRepo: Repository<PlannedRunEntity>,
     private readonly runService: RunService,
+    private readonly dataSource: DataSource,
   ) {}
 
   // --- CRUD ---
@@ -100,6 +103,26 @@ export class ScheduleService {
 
   @Interval(30_000)
   async processDueRuns() {
+    // Leader election: only one KCP instance runs the scheduler
+    const qr = this.dataSource.createQueryRunner();
+    await qr.connect();
+    try {
+      const [result] = await qr.query(
+        'SELECT pg_try_advisory_lock($1) as acquired',
+        [LOCK_SCHEDULE_DAEMON],
+      );
+      if (!result.acquired) return;
+      try {
+        await this._processDueRuns();
+      } finally {
+        await qr.query('SELECT pg_advisory_unlock($1)', [LOCK_SCHEDULE_DAEMON]);
+      }
+    } finally {
+      await qr.release();
+    }
+  }
+
+  private async _processDueRuns() {
     const now = new Date();
     const dueRuns = await this.plannedRepo.find({
       where: {

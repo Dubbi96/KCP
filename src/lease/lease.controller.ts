@@ -1,9 +1,12 @@
 import {
   Controller, Post, Delete, Get, Patch, Body, Param, Query,
+  UseGuards,
 } from '@nestjs/common';
 import { LeaseService } from './lease.service';
+import { KcpAuthGuard } from '../auth/kcp-auth.guard';
 
 @Controller('leases')
+@UseGuards(KcpAuthGuard)
 export class LeaseController {
   constructor(private readonly service: LeaseService) {}
 

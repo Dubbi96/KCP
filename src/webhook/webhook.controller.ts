@@ -1,9 +1,12 @@
 import {
   Controller, Post, Get, Put, Delete, Body, Param, Query,
+  UseGuards,
 } from '@nestjs/common';
 import { WebhookService } from './webhook.service';
+import { KcpAuthGuard } from '../auth/kcp-auth.guard';
 
 @Controller('webhooks')
+@UseGuards(KcpAuthGuard)
 export class WebhookController {
   constructor(private readonly service: WebhookService) {}
 

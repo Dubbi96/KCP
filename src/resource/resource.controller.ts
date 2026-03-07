@@ -1,7 +1,9 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { ResourceService } from './resource.service';
+import { KcpAuthGuard } from '../auth/kcp-auth.guard';
 
 @Controller('resources')
+@UseGuards(KcpAuthGuard)
 export class ResourceController {
   constructor(private readonly service: ResourceService) {}
 

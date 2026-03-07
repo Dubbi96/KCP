@@ -1,14 +1,17 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Interval } from '@nestjs/schedule';
 import { LeaseEntity, LeaseStatus } from './lease.entity';
 import { SlotService } from '../slot/slot.service';
 import { DeviceService } from '../device/device.service';
 
+const LOCK_LEASE_SWEEP = 100_004;
+
 @Injectable()
 export class LeaseService {
+  private readonly logger = new Logger('LeaseService');
   private readonly defaultTtlSec: number;
 
   constructor(
@@ -16,6 +19,7 @@ export class LeaseService {
     private readonly repo: Repository<LeaseEntity>,
     private readonly slotService: SlotService,
     private readonly deviceService: DeviceService,
+    private readonly dataSource: DataSource,
     config: ConfigService,
   ) {
     this.defaultTtlSec = config.get<number>('LEASE_DEFAULT_TTL_SEC', 3600);
@@ -129,23 +133,40 @@ export class LeaseService {
 
   @Interval(30_000)
   async sweepExpiredLeases() {
-    const expired = await this.repo
-      .createQueryBuilder('l')
-      .where('l.status = :s', { s: 'active' })
-      .andWhere('l.expiresAt < :now', { now: new Date() })
-      .getMany();
+    // Leader election: only one KCP instance runs the sweep
+    const qr = this.dataSource.createQueryRunner();
+    await qr.connect();
+    try {
+      const [result] = await qr.query(
+        'SELECT pg_try_advisory_lock($1) as acquired',
+        [LOCK_LEASE_SWEEP],
+      );
+      if (!result.acquired) return;
 
-    for (const lease of expired) {
-      console.log(`[KCP] Lease ${lease.id} expired — releasing ${lease.resourceType} ${lease.resourceId}`);
-      lease.status = 'expired';
-      lease.releasedAt = new Date();
-      await this.repo.save(lease);
+      try {
+        const expired = await this.repo
+          .createQueryBuilder('l')
+          .where('l.status = :s', { s: 'active' })
+          .andWhere('l.expiresAt < :now', { now: new Date() })
+          .getMany();
 
-      if (lease.resourceType === 'slot') {
-        await this.slotService.markSlotAvailable(lease.resourceId);
-      } else if (lease.resourceType === 'device') {
-        await this.deviceService.setStatus(lease.resourceId, 'available', undefined);
+        for (const lease of expired) {
+          this.logger.log(`Lease ${lease.id} expired — releasing ${lease.resourceType} ${lease.resourceId}`);
+          lease.status = 'expired';
+          lease.releasedAt = new Date();
+          await this.repo.save(lease);
+
+          if (lease.resourceType === 'slot') {
+            await this.slotService.markSlotAvailable(lease.resourceId);
+          } else if (lease.resourceType === 'device') {
+            await this.deviceService.setStatus(lease.resourceId, 'available', undefined);
+          }
+        }
+      } finally {
+        await qr.query('SELECT pg_advisory_unlock($1)', [LOCK_LEASE_SWEEP]);
       }
+    } finally {
+      await qr.release();
     }
   }
 }

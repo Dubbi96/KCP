@@ -94,9 +94,14 @@ export class RunService {
     error?: string;
     resultJson?: any;
     signals?: any;
-  }) {
+  }, requestingNodeId?: string) {
     const sr = await this.srRepo.findOne({ where: { id: scenarioRunId } });
     if (!sr) return;
+
+    // Verify the requesting node is the assigned node
+    if (requestingNodeId && sr.assignedNodeId && sr.assignedNodeId !== requestingNodeId) {
+      throw new BadRequestException('Node is not assigned to this scenario run');
+    }
 
     sr.status = result.status as ScenarioRunStatus;
     sr.durationMs = result.durationMs;
@@ -116,9 +121,14 @@ export class RunService {
     await this.checkRunCompletion(sr.runId);
   }
 
-  async onScenarioRunStarted(scenarioRunId: string) {
+  async onScenarioRunStarted(scenarioRunId: string, requestingNodeId?: string) {
     const sr = await this.srRepo.findOne({ where: { id: scenarioRunId } });
     if (!sr) return;
+
+    // Verify the requesting node is the assigned node
+    if (requestingNodeId && sr.assignedNodeId && sr.assignedNodeId !== requestingNodeId) {
+      throw new BadRequestException('Node is not assigned to this scenario run');
+    }
     sr.status = 'running';
     sr.startedAt = new Date();
     sr.attempt++;

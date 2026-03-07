@@ -1,9 +1,12 @@
 import {
   Controller, Post, Get, Put, Delete, Body, Param, Query,
+  UseGuards,
 } from '@nestjs/common';
 import { ScheduleService } from './schedule.service';
+import { KcpAuthGuard } from '../auth/kcp-auth.guard';
 
 @Controller('schedules')
+@UseGuards(KcpAuthGuard)
 export class ScheduleController {
   constructor(private readonly service: ScheduleService) {}
 

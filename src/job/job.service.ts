@@ -1,6 +1,6 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, DataSource } from 'typeorm';
 import { JobEntity, JobStatus } from './job.entity';
 import { NodeService } from '../node/node.service';
 import { SlotService } from '../slot/slot.service';
@@ -9,9 +9,12 @@ import { LeaseService } from '../lease/lease.service';
 
 @Injectable()
 export class JobService {
+  private readonly logger = new Logger('JobService');
+
   constructor(
     @InjectRepository(JobEntity)
     private readonly repo: Repository<JobEntity>,
+    private readonly dataSource: DataSource,
     private readonly nodeService: NodeService,
     private readonly slotService: SlotService,
     private readonly deviceService: DeviceService,
@@ -44,78 +47,107 @@ export class JobService {
     return this.repo.save(job);
   }
 
+  /**
+   * Atomic job claim using FOR UPDATE SKIP LOCKED.
+   * Scans up to 10 candidates to avoid starvation when the first job
+   * doesn't match the requesting node's capabilities.
+   */
   async claim(nodeId: string, platforms: string[]) {
     const node = await this.nodeService.findOne(nodeId);
-    // Draining or offline nodes cannot claim new jobs
     if (node.status !== 'online')
       throw new BadRequestException(`Node is ${node.status} — cannot claim jobs`);
 
-    const job = await this.repo
-      .createQueryBuilder('j')
-      .where('j.status = :status', { status: 'pending' })
-      .andWhere('j.platform IN (:...platforms)', { platforms })
-      .orderBy('j.priority', 'DESC')
-      .addOrderBy('j.createdAt', 'ASC')
-      .getOne();
+    return this.dataSource.transaction(async (manager) => {
+      const jobRepo = manager.getRepository(JobEntity);
 
-    if (!job) return null;
+      // pessimistic_partial_write = FOR UPDATE SKIP LOCKED in PostgreSQL
+      // This prevents race conditions: concurrent nodes each get different rows
+      const candidates = await jobRepo
+        .createQueryBuilder('j')
+        .where('j.status = :status', { status: 'pending' })
+        .andWhere('j.platform IN (:...platforms)', { platforms })
+        .orderBy('j.priority', 'DESC')
+        .addOrderBy('j.createdAt', 'ASC')
+        .limit(10)
+        .setLock('pessimistic_partial_write')
+        .getMany();
 
-    // Check if node can handle this job
-    if (job.requiredLabels?.length) {
-      const hasLabels = job.requiredLabels.every((l) => node.labels.includes(l));
-      if (!hasLabels) return null;
-    }
+      if (!candidates.length) return null;
 
-    // For mobile jobs, check device availability on this node
-    if (job.platform !== 'web') {
-      if (job.requiredDeviceId) {
-        const dev = await this.deviceService.findOne(job.requiredDeviceId);
-        if (!dev || dev.nodeId !== nodeId || dev.status !== 'available') return null;
-      } else {
-        const avail = await this.deviceService.findAvailable(job.platform, nodeId);
-        if (!avail.length) return null;
+      for (const job of candidates) {
+        // Label check
+        if (job.requiredLabels?.length) {
+          if (!job.requiredLabels.every((l) => node.labels.includes(l))) continue;
+        }
+
+        // Device check for mobile
+        if (job.platform !== 'web') {
+          if (job.requiredDeviceId) {
+            const dev = await this.deviceService.findOne(job.requiredDeviceId);
+            if (!dev || dev.nodeId !== nodeId || dev.status !== 'available') continue;
+          } else {
+            const avail = await this.deviceService.findAvailable(job.platform, nodeId);
+            if (!avail.length) continue;
+          }
+        }
+
+        // Slot check
+        const slot = await this.slotService.findAvailableSlot(job.platform, nodeId);
+        if (!slot) continue;
+
+        // Assign the job atomically within the transaction
+        job.status = 'assigned';
+        job.assignedNodeId = nodeId;
+        job.assignedSlotId = slot.id;
+        job.attempt++;
+        await jobRepo.save(job);
+
+        await this.slotService.markSlotBusy(slot.id);
+
+        // Reserve device if mobile
+        if (job.platform !== 'web') {
+          const devices = job.requiredDeviceId
+            ? [await this.deviceService.findOne(job.requiredDeviceId)]
+            : await this.deviceService.findAvailable(job.platform, nodeId);
+          if (devices[0]) {
+            job.assignedDeviceId = devices[0].id;
+            await this.deviceService.setStatus(devices[0].id, 'leased', job.tenantId);
+            await jobRepo.save(job);
+          }
+        }
+
+        this.logger.log(
+          `Job ${job.id} claimed by node ${node.name} (slot=${slot.id}, attempt=${job.attempt})`,
+        );
+        return job;
       }
-    }
 
-    // Check slot availability
-    const slot = await this.slotService.findAvailableSlot(job.platform, nodeId);
-    if (!slot) return null;
-
-    // Assign the job
-    job.status = 'assigned';
-    job.assignedNodeId = nodeId;
-    job.assignedSlotId = slot.id;
-    job.attempt++;
-    await this.repo.save(job);
-
-    await this.slotService.markSlotBusy(slot.id);
-
-    // If mobile, also reserve a device
-    if (job.platform !== 'web') {
-      const devices = job.requiredDeviceId
-        ? [await this.deviceService.findOne(job.requiredDeviceId)]
-        : await this.deviceService.findAvailable(job.platform, nodeId);
-      if (devices[0]) {
-        job.assignedDeviceId = devices[0].id;
-        await this.deviceService.setStatus(devices[0].id, 'leased', job.tenantId);
-        await this.repo.save(job);
-      }
-    }
-
-    return job;
+      return null;
+    });
   }
 
-  async reportStarted(jobId: string) {
+  async reportStarted(jobId: string, requestingNodeId?: string) {
     const job = await this.repo.findOne({ where: { id: jobId } });
     if (!job) throw new NotFoundException('Job not found');
+
+    // Verify the requesting node is the assigned node
+    if (requestingNodeId && job.assignedNodeId && job.assignedNodeId !== requestingNodeId) {
+      throw new BadRequestException('Node is not assigned to this job');
+    }
+
     job.status = 'running';
     job.startedAt = new Date();
     return this.repo.save(job);
   }
 
-  async reportCompleted(jobId: string, result: Record<string, any>) {
+  async reportCompleted(jobId: string, result: Record<string, any>, requestingNodeId?: string) {
     const job = await this.repo.findOne({ where: { id: jobId } });
     if (!job) throw new NotFoundException('Job not found');
+
+    // Verify the requesting node is the assigned node
+    if (requestingNodeId && job.assignedNodeId && job.assignedNodeId !== requestingNodeId) {
+      throw new BadRequestException('Node is not assigned to this job');
+    }
 
     // Idempotent: ignore duplicate completion callbacks
     if (['completed', 'failed', 'cancelled', 'retry_pending'].includes(job.status)) {
@@ -144,7 +176,6 @@ export class JobService {
       job.assignedDeviceId = undefined;
       await this.repo.save(job);
 
-      // Create retry as new pending
       const retry = this.repo.create({
         tenantId: job.tenantId,
         runId: job.runId,

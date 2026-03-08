@@ -1,0 +1,6 @@
+aws_region  = "ap-northeast-2"
+environment = "prod"
+project     = "katab"
+db_username = "kcp_admin"
+db_password = "CHANGE_ME"
+image_tag   = "latest"

@@ -11,4 +11,7 @@ export default new DataSource({
   database: process.env.DB_DATABASE || 'katab_control_plane',
   entities: ['dist/**/*.entity.js'],
   migrations: ['dist/database/migrations/*.js'],
+  ...(process.env.NODE_ENV !== 'development' && process.env.DB_HOST !== 'localhost' && {
+    ssl: { rejectUnauthorized: false },
+  }),
 });

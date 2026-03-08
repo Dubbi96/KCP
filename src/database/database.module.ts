@@ -14,8 +14,11 @@ import { ConfigService } from '@nestjs/config';
         password: cfg.get('DB_PASSWORD', 'katab_secret'),
         database: cfg.get('DB_DATABASE', 'katab_control_plane'),
         autoLoadEntities: true,
-        synchronize: cfg.get('NODE_ENV') === 'development',
+        synchronize: true,
         logging: cfg.get('NODE_ENV') === 'development' ? ['error'] : false,
+        ...(cfg.get('NODE_ENV') !== 'development' && cfg.get('DB_HOST') !== 'localhost' && {
+          ssl: { rejectUnauthorized: false },
+        }),
       }),
     }),
   ],

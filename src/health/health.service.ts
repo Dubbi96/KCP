@@ -13,6 +13,7 @@ import { LeaseEntity } from '../lease/lease.entity';
 const LOCK_NODE_HEALTH = 100_001;
 const LOCK_JOB_TIMEOUTS = 100_002;
 const LOCK_DRAIN_CHECK = 100_003;
+const LOCK_QUARANTINE_CHECK = 100_006;
 
 @Injectable()
 export class HealthService {
@@ -76,6 +77,17 @@ export class HealthService {
     await this.withLeaderLock(LOCK_JOB_TIMEOUTS, async () => {
       await this.reapStuckAssignedJobs();
       await this.reapStuckRunningJobs();
+    });
+  }
+
+  // --- Quarantine expiry check (60s) ---
+  @Interval(60_000)
+  async checkQuarantineExpiry() {
+    await this.withLeaderLock(LOCK_QUARANTINE_CHECK, async () => {
+      const cleared = await this.deviceService.clearExpiredQuarantines();
+      if (cleared > 0) {
+        this.logger.log(`Cleared ${cleared} expired device quarantine(s)`);
+      }
     });
   }
 

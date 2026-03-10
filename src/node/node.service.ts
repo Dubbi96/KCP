@@ -78,6 +78,11 @@ export class NodeService {
       await this.slotService.updateSlotStatus(nodeId, dto.slots);
     }
 
+    // Sync device health from heartbeat (Phase 5)
+    if ((dto as any).deviceHealth) {
+      await this.deviceService.syncHealthFromHeartbeat(nodeId, (dto as any).deviceHealth);
+    }
+
     // Return directives to the node (e.g., drain command)
     const directives: Record<string, any> = {};
     if (node.status === 'draining') {

@@ -163,9 +163,15 @@ export class JobService {
     if (job.assignedSlotId) {
       await this.slotService.markSlotAvailable(job.assignedSlotId);
     }
-    // Release device
+    // Release device + record health outcome
     if (job.assignedDeviceId) {
       await this.deviceService.setStatus(job.assignedDeviceId, 'available', undefined);
+
+      if (result.passed) {
+        await this.deviceService.recordSuccess(job.assignedDeviceId).catch(() => {});
+      } else if (result.infraFailure && result.failureCode) {
+        await this.deviceService.recordFailure(job.assignedDeviceId, result.failureCode).catch(() => {});
+      }
     }
 
     // If failed and retryable, re-queue

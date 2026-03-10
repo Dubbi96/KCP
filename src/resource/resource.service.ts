@@ -43,12 +43,14 @@ export class ResourceService {
       ? onlineNodes.reduce((s, n) => s + n.memoryUsagePercent, 0) / onlineNodes.length
       : 0;
 
-    const devicesByPlatform: Record<string, { total: number; available: number; leased: number; offline: number }> = {};
+    const devicesByPlatform: Record<string, { total: number; available: number; leased: number; offline: number; quarantined: number }> = {};
     for (const d of devices) {
       if (!devicesByPlatform[d.platform])
-        devicesByPlatform[d.platform] = { total: 0, available: 0, leased: 0, offline: 0 };
+        devicesByPlatform[d.platform] = { total: 0, available: 0, leased: 0, offline: 0, quarantined: 0 };
       devicesByPlatform[d.platform].total++;
-      if (d.status === 'available') devicesByPlatform[d.platform].available++;
+      const isQuarantined = d.quarantineUntil && new Date(d.quarantineUntil) > new Date();
+      if (isQuarantined) devicesByPlatform[d.platform].quarantined++;
+      else if (d.status === 'available') devicesByPlatform[d.platform].available++;
       else if (d.status === 'leased') devicesByPlatform[d.platform].leased++;
       else devicesByPlatform[d.platform].offline++;
     }
@@ -201,5 +203,48 @@ export class ResourceService {
     }
 
     return { capacity, tenantActiveLeases: tenantLeases };
+  }
+
+  /**
+   * Capacity forecast for a platform: available resources, pending jobs, estimated delay.
+   */
+  async getCapacityForecast(platform: string) {
+    const slotSummary = await this.slotService.getPoolSummary();
+    const platformSlots = (slotSummary as any)[platform] || { total: 0, available: 0, busy: 0 };
+
+    const devices = platform !== 'web'
+      ? await this.deviceService.findAvailable(platform)
+      : [];
+
+    const pendingJobs = await this.jobRepo.count({
+      where: { platform, status: 'pending' as any },
+    });
+
+    const runningJobs = await this.jobRepo.count({
+      where: { platform, status: In(['assigned', 'running']) as any },
+    });
+
+    // Quarantined devices count
+    const allDevices = platform !== 'web'
+      ? await this.deviceService.findAll({ platform })
+      : [];
+    const quarantinedCount = allDevices.filter(
+      d => d.quarantineUntil && new Date(d.quarantineUntil) > new Date()
+    ).length;
+
+    // Estimated queue delay (rough: pending / max(available, 1) * avg job duration)
+    const availableCapacity = Math.max(platformSlots.available, 1);
+    const estimatedDelayMinutes = Math.round((pendingJobs / availableCapacity) * 5); // assume ~5 min avg job
+
+    return {
+      platform,
+      slots: platformSlots,
+      availableDevices: devices.length,
+      quarantinedDevices: quarantinedCount,
+      pendingJobs,
+      runningJobs,
+      estimatedQueueDelayMinutes: estimatedDelayMinutes,
+      hasCapacity: platformSlots.available > 0 && (platform === 'web' || devices.length > 0),
+    };
   }
 }

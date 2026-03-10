@@ -32,4 +32,9 @@ export class ResourceController {
     const nodeId = await this.service.selectBestNode(platform, labelArr, deviceId);
     return { nodeId };
   }
+
+  @Get('capacity/forecast')
+  async getCapacityForecast(@Query('platform') platform: string) {
+    return this.service.getCapacityForecast(platform);
+  }
 }

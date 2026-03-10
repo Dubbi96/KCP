@@ -206,7 +206,36 @@ export class ResourceService {
   }
 
   /**
+   * Compute platform-specific job duration stats from recent completed jobs.
+   * Returns avgMs and p90Ms for the given platform.
+   */
+  private async getJobDurationStats(platform: string): Promise<{ avgMs: number; p90Ms: number }> {
+    const recentJobs = await this.jobRepo.find({
+      where: { platform, status: 'completed' as any },
+      order: { completedAt: 'DESC' },
+      take: 50,
+    });
+
+    const durations = recentJobs
+      .filter(j => j.startedAt && j.completedAt)
+      .map(j => new Date(j.completedAt!).getTime() - new Date(j.startedAt!).getTime())
+      .filter(d => d > 0);
+
+    if (durations.length === 0) {
+      return { avgMs: 5 * 60_000, p90Ms: 10 * 60_000 }; // fallback: 5min avg, 10min p90
+    }
+
+    durations.sort((a, b) => a - b);
+    const avgMs = Math.round(durations.reduce((s, d) => s + d, 0) / durations.length);
+    const p90Idx = Math.floor(durations.length * 0.9);
+    const p90Ms = durations[Math.min(p90Idx, durations.length - 1)];
+
+    return { avgMs, p90Ms };
+  }
+
+  /**
    * Capacity forecast for a platform: available resources, pending jobs, estimated delay.
+   * Uses actual job duration stats instead of fixed 5-minute assumption.
    */
   async getCapacityForecast(platform: string) {
     const slotSummary = await this.slotService.getPoolSummary();
@@ -232,9 +261,22 @@ export class ResourceService {
       d => d.quarantineUntil && new Date(d.quarantineUntil) > new Date()
     ).length;
 
-    // Estimated queue delay (rough: pending / max(available, 1) * avg job duration)
-    const availableCapacity = Math.max(platformSlots.available, 1);
-    const estimatedDelayMinutes = Math.round((pendingJobs / availableCapacity) * 5); // assume ~5 min avg job
+    // Draining nodes: exclude their slots from effective capacity
+    const nodes = await this.nodeService.findAll();
+    const drainingNodeIds = new Set(nodes.filter(n => n.status === 'draining').map(n => n.id));
+    const effectiveAvailable = platformSlots.available; // slots already exclude offline nodes
+
+    // Duration-based forecast using actual job history
+    const durationStats = await this.getJobDurationStats(platform);
+
+    // Quarantine weight: reduce effective capacity if many devices quarantined
+    const totalDeviceCount = allDevices.length || 1;
+    const quarantineRatio = quarantinedCount / totalDeviceCount;
+    const capacityMultiplier = Math.max(1 - quarantineRatio, 0.1); // at least 10%
+
+    const adjustedCapacity = Math.max(effectiveAvailable * capacityMultiplier, 1);
+    const estimatedDelayMs = (pendingJobs / adjustedCapacity) * durationStats.avgMs;
+    const estimatedDelayMinutes = Math.round(estimatedDelayMs / 60_000);
 
     return {
       platform,
@@ -244,7 +286,12 @@ export class ResourceService {
       pendingJobs,
       runningJobs,
       estimatedQueueDelayMinutes: estimatedDelayMinutes,
-      hasCapacity: platformSlots.available > 0 && (platform === 'web' || devices.length > 0),
+      hasCapacity: effectiveAvailable > 0 && (platform === 'web' || devices.length > 0),
+      durationStats: {
+        avgMinutes: Math.round(durationStats.avgMs / 60_000 * 10) / 10,
+        p90Minutes: Math.round(durationStats.p90Ms / 60_000 * 10) / 10,
+        sampleSize: (await this.jobRepo.count({ where: { platform, status: 'completed' as any } })),
+      },
     };
   }
 }

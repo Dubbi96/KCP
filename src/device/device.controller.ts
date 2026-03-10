@@ -68,4 +68,21 @@ export class DeviceController {
     await this.service.recordSuccess(id);
     return { ok: true };
   }
+
+  @Get(':id/history')
+  async getHistory(
+    @Param('id') id: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.service.getDeviceHistory(id, parseInt(limit || '50', 10));
+  }
+
+  @Post(':id/recovery-event')
+  async recordRecoveryEvent(
+    @Param('id') id: string,
+    @Body() body: { action: string; failureCode: string; success: boolean; durationMs?: number; errorMessage?: string; nodeId?: string },
+  ) {
+    await this.service.recordRecoveryEvent(id, body);
+    return { ok: true };
+  }
 }

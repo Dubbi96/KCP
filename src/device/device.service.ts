@@ -2,6 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { DeviceEntity, DeviceStatus, DeviceHealthStatus } from './device.entity';
+import {
+  DeviceHealthEventEntity,
+  DeviceFailureEventEntity,
+  RecoveryActionEventEntity,
+  QuarantineEventEntity,
+} from './device-event.entity';
 
 const AUTO_QUARANTINE_THRESHOLD = 5;
 const DEFAULT_QUARANTINE_MINUTES = 30;
@@ -13,6 +19,14 @@ export class DeviceService {
   constructor(
     @InjectRepository(DeviceEntity)
     private readonly repo: Repository<DeviceEntity>,
+    @InjectRepository(DeviceHealthEventEntity)
+    private readonly healthEventRepo: Repository<DeviceHealthEventEntity>,
+    @InjectRepository(DeviceFailureEventEntity)
+    private readonly failureEventRepo: Repository<DeviceFailureEventEntity>,
+    @InjectRepository(RecoveryActionEventEntity)
+    private readonly recoveryEventRepo: Repository<RecoveryActionEventEntity>,
+    @InjectRepository(QuarantineEventEntity)
+    private readonly quarantineEventRepo: Repository<QuarantineEventEntity>,
   ) {}
 
   async syncFromHeartbeat(nodeId: string, reported: any[]) {
@@ -73,7 +87,10 @@ export class DeviceService {
 
       if (!device) continue;
 
-      device.healthStatus = (snapshot.healthStatus || 'unknown') as DeviceHealthStatus;
+      const prevStatus = device.healthStatus;
+      const newStatus = (snapshot.healthStatus || 'unknown') as DeviceHealthStatus;
+
+      device.healthStatus = newStatus;
       device.lastHealthCheckAt = new Date();
 
       if (snapshot.lastFailureCode) {
@@ -81,6 +98,13 @@ export class DeviceService {
       }
 
       await this.repo.save(device);
+
+      // Record health transition
+      if (prevStatus !== newStatus) {
+        await this.healthEventRepo.save(this.healthEventRepo.create({
+          deviceId: device.id, previousStatus: prevStatus, newStatus, nodeId,
+        }));
+      }
     }
   }
 
@@ -149,6 +173,12 @@ export class DeviceService {
     });
 
     this.logger.warn(`Device ${deviceId} quarantined until ${until.toISOString()} (reason: ${reason || 'manual'})`);
+
+    await this.quarantineEventRepo.save(this.quarantineEventRepo.create({
+      deviceId, action: 'quarantine', reason: reason || 'manual',
+      durationMinutes: duration,
+      triggeredBy: reason?.startsWith('auto:') ? 'auto' : 'manual',
+    }));
   }
 
   async unquarantine(deviceId: string) {
@@ -158,6 +188,10 @@ export class DeviceService {
       consecutiveFailures: 0,
     });
     this.logger.log(`Device ${deviceId} removed from quarantine`);
+
+    await this.quarantineEventRepo.save(this.quarantineEventRepo.create({
+      deviceId, action: 'release', triggeredBy: 'manual',
+    }));
   }
 
   /**
@@ -171,6 +205,11 @@ export class DeviceService {
     device.consecutiveFailures += 1;
     device.lastFailureCode = failureCode;
     await this.repo.save(device);
+
+    await this.failureEventRepo.save(this.failureEventRepo.create({
+      deviceId, failureCode, nodeId: device.nodeId,
+      consecutiveCount: device.consecutiveFailures,
+    }));
 
     if (device.consecutiveFailures >= AUTO_QUARANTINE_THRESHOLD) {
       await this.quarantine(deviceId, DEFAULT_QUARANTINE_MINUTES, `auto: ${failureCode} x${device.consecutiveFailures}`);
@@ -225,5 +264,29 @@ export class DeviceService {
 
   async findOne(id: string) {
     return this.repo.findOne({ where: { id } });
+  }
+
+  // ─── History / Events ──────────────────────────────
+
+  async getDeviceHistory(deviceId: string, limit = 50) {
+    const [healthEvents, failureEvents, recoveryEvents, quarantineEvents] = await Promise.all([
+      this.healthEventRepo.find({ where: { deviceId }, order: { createdAt: 'DESC' }, take: limit }),
+      this.failureEventRepo.find({ where: { deviceId }, order: { createdAt: 'DESC' }, take: limit }),
+      this.recoveryEventRepo.find({ where: { deviceId }, order: { createdAt: 'DESC' }, take: limit }),
+      this.quarantineEventRepo.find({ where: { deviceId }, order: { createdAt: 'DESC' }, take: limit }),
+    ]);
+    return { healthEvents, failureEvents, recoveryEvents, quarantineEvents };
+  }
+
+  async recordRecoveryEvent(deviceId: string, event: {
+    action: string; failureCode: string; success: boolean;
+    durationMs?: number; errorMessage?: string; nodeId?: string;
+  }) {
+    await this.recoveryEventRepo.save(this.recoveryEventRepo.create({
+      deviceId, ...event, durationMs: event.durationMs || 0,
+    }));
+
+    // Update device lastRecoveryAction
+    await this.repo.update(deviceId, { lastRecoveryAction: event.action });
   }
 }
